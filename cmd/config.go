@@ -10,8 +10,11 @@ import (
 )
 
 type Config struct {
-	GmailFrom     string `json:"gmail_from"`
-	GmailPassword string `json:"gmail_password"`
+	TelegramToken  string            `json:"telegram_token,omitempty"`
+	TelegramChatID string            `json:"telegram_chat_id,omitempty"`
+	GmailFrom     string            `json:"gmail_from"`
+	GmailPassword string            `json:"gmail_password"`
+	Contacts      map[string]string `json:"contacts,omitempty"`
 }
 
 func getConfigPath() (string, error) {
@@ -35,6 +38,9 @@ func loadConfig() (*Config, error) {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil, err
 	}
+	if cfg.Contacts == nil {
+		cfg.Contacts = map[string]string{}
+	}
 	return &cfg, nil
 }
 
@@ -43,7 +49,6 @@ func saveConfig(cfg *Config) error {
 	if err != nil {
 		return err
 	}
-	// 폴더 없으면 자동 생성
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err
 	}
@@ -51,7 +56,7 @@ func saveConfig(cfg *Config) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0600) // 0600 = 본인만 읽기/쓰기
+	return os.WriteFile(path, data, 0600)
 }
 
 var configCmd = &cobra.Command{
@@ -63,19 +68,22 @@ var configSetCmd = &cobra.Command{
 	Use:   "set",
 	Short: "설정값 저장",
 	Run: func(cmd *cobra.Command, args []string) {
-		// 기존 config 불러오기 (없으면 새로 생성)
 		cfg, err := loadConfig()
 		if err != nil {
-			cfg = &Config{}
+			cfg = &Config{Contacts: map[string]string{}}
 		}
-
 		if v, _ := cmd.Flags().GetString("gmail-from"); v != "" {
 			cfg.GmailFrom = v
 		}
+		if v, _ := cmd.Flags().GetString("tg-token"); v != "" {
+		cfg.TelegramToken = v
+	}
+		if v, _ := cmd.Flags().GetString("tg-chat-id"); v != "" {
+		cfg.TelegramChatID = v
+	}
 		if v, _ := cmd.Flags().GetString("gmail-password"); v != "" {
 			cfg.GmailPassword = v
 		}
-
 		if err := saveConfig(cfg); err != nil {
 			fmt.Println("❌ 저장 실패:", err)
 			os.Exit(1)
@@ -95,6 +103,7 @@ var configShowCmd = &cobra.Command{
 		}
 		fmt.Println("📧 gmail_from    :", cfg.GmailFrom)
 		fmt.Println("🔑 gmail_password:", "****"+cfg.GmailPassword[len(cfg.GmailPassword)-4:])
+		fmt.Printf("📒 contacts      : %d명 등록됨\n", len(cfg.Contacts))
 	},
 }
 
@@ -105,4 +114,6 @@ func init() {
 
 	configSetCmd.Flags().String("gmail-from", "", "Gmail 주소")
 	configSetCmd.Flags().String("gmail-password", "", "Gmail 앱 비밀번호")
+	configSetCmd.Flags().String("tg-token", "", "텔레그램 봇 토큰")
+	configSetCmd.Flags().String("tg-chat-id", "", "텔레그램 Chat ID")
 }
