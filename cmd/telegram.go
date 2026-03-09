@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -29,13 +30,16 @@ var telegramCmd = &cobra.Command{
 
 		text, _ := cmd.Flags().GetString("text")
 		audio, _ := cmd.Flags().GetString("audio")
+		photo, _ := cmd.Flags().GetString("photo")
+		video, _ := cmd.Flags().GetString("video")
+		file, _ := cmd.Flags().GetString("file")
 
 		if text == "" && len(args) > 0 {
 			text = args[0]
 		}
 
 		if audio != "" {
-			if err := sendTelegramAudio(cfg.TelegramToken, cfg.TelegramChatID, audio, text); err != nil {
+			if err := sendTelegramFile(cfg.TelegramToken, cfg.TelegramChatID, "sendAudio", "audio", audio, text); err != nil {
 				fmt.Println("❌ 오디오 전송 실패:", err)
 				os.Exit(1)
 			}
@@ -43,8 +47,36 @@ var telegramCmd = &cobra.Command{
 			return
 		}
 
+		if photo != "" {
+			if err := sendTelegramFile(cfg.TelegramToken, cfg.TelegramChatID, "sendPhoto", "photo", photo, text); err != nil {
+				fmt.Println("❌ 이미지 전송 실패:", err)
+				os.Exit(1)
+			}
+			fmt.Println("✅ 텔레그램 이미지 전송 완료!")
+			return
+		}
+
+		if video != "" {
+			if err := sendTelegramFile(cfg.TelegramToken, cfg.TelegramChatID, "sendVideo", "video", video, text); err != nil {
+				fmt.Println("❌ 영상 전송 실패:", err)
+				os.Exit(1)
+			}
+			fmt.Println("✅ 텔레그램 영상 전송 완료!")
+			return
+		}
+
+		if file != "" {
+			if err := sendTelegramFile(cfg.TelegramToken, cfg.TelegramChatID, "sendDocument", "document", file, text); err != nil {
+				fmt.Println("❌ 파일 전송 실패:", err)
+				os.Exit(1)
+			}
+			fmt.Println("✅ 텔레그램 파일 전송 완료!")
+			return
+		}
+
 		if text == "" {
 			fmt.Println("❌ 메시지를 입력해줘! (예: send telegram \"안녕\")")
+			fmt.Println("📎 파일 전송: --audio / --photo / --video / --file")
 			os.Exit(1)
 		}
 
@@ -75,39 +107,53 @@ func sendTelegram(token, chatID, text string) error {
 	return nil
 }
 
-func sendTelegramAudio(token, chatID, filePath, caption string) error {
-	file, err := os.Open(filePath)
+// sendTelegramFile: audio/photo/video/document 공통 전송 함수
+// 파일은 경로만 받아서 스트리밍으로 전송 — 바이너리 데이터는 메모리에 올리지 않음
+func sendTelegramFile(token, chatID, method, fieldName, filePath, caption string) error {
+	f, err := os.Open(filePath)
 	if err != nil {
 		return fmt.Errorf("파일 열기 실패: %w", err)
 	}
-	defer file.Close()
+	defer f.Close()
 
-	var buf bytes.Buffer
-	w := multipart.NewWriter(&buf)
+	pr, pw := io.Pipe()
+	w := multipart.NewWriter(pw)
 
-	_ = w.WriteField("chat_id", chatID)
-	if caption != "" {
-		_ = w.WriteField("caption", caption)
-	}
+	go func() {
+		defer pw.Close()
+		defer w.Close()
 
-	fw, err := w.CreateFormFile("audio", filepath.Base(filePath))
-	if err != nil {
-		return err
-	}
-	if _, err = io.Copy(fw, file); err != nil {
-		return err
-	}
-	w.Close()
+		_ = w.WriteField("chat_id", chatID)
+		if caption != "" {
+			_ = w.WriteField("caption", caption)
+		}
 
-	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendAudio", token)
-	resp, err := http.Post(url, w.FormDataContentType(), &buf)
+		fw, err := w.CreateFormFile(fieldName, filepath.Base(filePath))
+		if err != nil {
+			pw.CloseWithError(err)
+			return
+		}
+		if _, err = io.Copy(fw, f); err != nil {
+			pw.CloseWithError(err)
+			return
+		}
+	}()
+
+	apiURL := fmt.Sprintf("https://api.telegram.org/bot%s/%s", token, method)
+	resp, err := http.Post(apiURL, w.FormDataContentType(), pr)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
+
 	if resp.StatusCode != 200 {
 		b, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(b))
+		// 에러 메시지만 읽고 바이너리는 버림
+		msg := string(b)
+		if idx := strings.Index(msg, "\"description\""); idx != -1 {
+			msg = msg[idx:]
+		}
+		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, msg)
 	}
 	return nil
 }
@@ -115,5 +161,8 @@ func sendTelegramAudio(token, chatID, filePath, caption string) error {
 func init() {
 	rootCmd.AddCommand(telegramCmd)
 	telegramCmd.Flags().StringP("text", "t", "", "전송할 메시지")
-	telegramCmd.Flags().StringP("audio", "a", "", "전송할 오디오 파일 경로 (.mp3)")
+	telegramCmd.Flags().StringP("audio", "a", "", "오디오 파일 경로 (.mp3)")
+	telegramCmd.Flags().StringP("photo", "p", "", "이미지 파일 경로 (.jpg, .png)")
+	telegramCmd.Flags().StringP("video", "v", "", "영상 파일 경로 (.mp4)")
+	telegramCmd.Flags().StringP("file", "f", "", "파일 경로 (모든 형식)")
 }
